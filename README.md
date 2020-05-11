@@ -13,7 +13,7 @@ MEKF.m : filtering using the standard multiplicative extended Kalman filter
 ```
 
 ## First step to use
-Try the follow script
+Try the following script
 ```
 test.m : generate a reference motion and implement the above three filters
 ```
