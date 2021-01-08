@@ -1,6 +1,7 @@
-function [ R, x, Sigma, stepT ] = MEKF( gyro, Mea, sf, parameters )
-% A standard implementation of MEKF for attitude and gyro bias estimation.
-% See for example Joan Solà, https://arxiv.org/abs/1711.02508, 2017
+function [ R, x, Sigma, stepT ] = UKF( gyro, Mea, sf, parameters )
+% A standard implementation of UKF for attitude and gyro bias estimation.
+% see J. L. Crassidis and F. L. Markley, “Unscented filtering for spacecraft
+% attitude estimation,” Journal of guidance, control, and dynamics, 2003.
 % Inputs: gyro - measured angular velocity
 %         RMea - measured attitude
 %         sf - gyroscope sampling frequency in Hz
@@ -103,53 +104,66 @@ for n = 2:N
     
     % propagate
     av = (gyro(:,n-1)+gyro(:,n))/2-x(:,n-1);
-    if omegaLocal
-        R(:,:,n) = R(:,:,n-1)*expRot(av*dt);
-        F = [expRot(av*dt)',-eye(3)*dt;zeros(3),eye(3)];
-        Sigma(:,:,n) = F*Sigma(:,:,n-1)*F'+[eye(3)*randomWalk^2*dt,zeros(3);
-            zeros(3),eye(3)*biasInstability^2*dt];
-    else
-        R(:,:,n) = expRot(av*dt)*R(:,:,n-1);
-        F = [eye(3),-R(:,:,n)'*dt;zeros(3),eye(3)];
-        Sigma(:,:,n) = F*Sigma(:,:,n-1)*F'+[eye(3)*randomWalk^2*dt,zeros(3);
-            zeros(3),eye(3)*biasInstability^2*dt];
+    [x1,w1] = GGetSigmaPoints([zeros(3,1);x(:,n-1)],Sigma(:,:,n-1));
+    
+    R_sigma = zeros(3,3,13);
+    for ns = 13:-1:1
+        if omegaLocal
+            R_sigma(:,:,ns) = R(:,:,n-1)*expRot(x1(1:3,ns))*expRot((av-x1(4:6,ns))*dt);
+            x1(1:3,ns) = logRot(R_sigma(:,:,end)'*R_sigma(:,:,ns),'v');
+        else
+            R_sigma(:,:,ns) = expRot((av-x1(4:6,ns))*dt)*R(:,:,n-1)*expRot(x1(1:3,ns));
+            x1(1:3,ns) = logRot(R_sigma(:,:,end)'*R_sigma(:,:,ns),'v');
+        end
     end
+    
+    R(:,:,n) = R_sigma(:,:,end);
     x(:,n) = x(:,n-1);
+    
+    Sigma(:,:,n) = sum(permute(x1-x1(:,end),[1,3,2]).*permute(x1-x1(:,end),[3,1,2]).*permute(w1,[3,1,2]),3) + ...
+        [eye(3)*randomWalk^2*dt,zeros(3);zeros(3),eye(3)*biasInstability^2*dt];
     
     % update
     if rem(n,5)==2
         if meaIsVec
             % vector measurement
-            vPredict = zeros(3*nVecRef,1);
-            H = zeros(3*nVecRef,6);
+            vPredict = zeros(3*nVecRef,13);
             vMeaNoise = zeros(3*nVecRef,3*nVecRef);
             for nv = 1:nVecRef
-                if vecRefInertial
-                    vPredict(3*(nv-1)+1:3*nv) = R(:,:,n)'*vRef(3*(nv-1)+1:3*nv);
-                    H(3*(nv-1)+1:3*nv,1:3) = hat(R(:,:,n)'*vRef(3*(nv-1)+1:3*nv));
-                else
-                    vPredict(3*(nv-1)+1:3*nv) = R(:,:,n)*vRef(3*(nv-1)+1:3*nv);
-                    H(3*(nv-1)+1:3*nv,1:3) = -R(:,:,n)*hat(vRef(3*(nv-1)+1:3*nv));
+                for ns = 1:13
+                    if vecRefInertial
+                        vPredict(3*(nv-1)+1:3*nv,ns) = R_sigma(:,:,ns)'*vRef(3*(nv-1)+1:3*nv);
+                    else
+                        vPredict(3*(nv-1)+1:3*nv,ns) = R_sigma(:,:,ns)*vRef(3*(nv-1)+1:3*nv);
+                    end
                 end
                 vMeaNoise(3*(nv-1)+1:3*nv,3*(nv-1)+1:3*nv) = eye(3)*meaNoise(nv);
             end
             
-            K = Sigma(:,:,n)*H'*(H*Sigma(:,:,n)*H'+vMeaNoise)^-1;
-            dx = K*(Mea(:,n)-vPredict);
+            vMiu = sum(vPredict.*w1,2);
+            vSigma = sum(permute(vPredict-vMiu,[1,3,2]).*permute(vPredict-vMiu,[3,1,2]).*permute(w1,[3,1,2]),3);
+            Pxv = sum(permute(x1-x1(:,end),[1,3,2]).*permute(vPredict-vMiu,[3,1,2]).*permute(w1,[3,1,2]),3);
+            
+            K = Pxv*(vSigma+vMeaNoise)^-1;
+            dx = K*(Mea(:,n)-vPredict(:,end));
         else
             % attitude measurement
-            H = [eye(3),zeros(3)];
+            vSigma = sum(permute(x1(1:3,:),[1,3,2]).*permute(x1(1:3,:),[3,1,2]).*permute(w1,[3,1,2]),3);
+            Pxv = sum(permute(x1-x1(:,end),[1,3,2]).*permute(x1(1:3,:),[3,1,2]).*permute(w1,[3,1,2]),3);
+            
             if attMeaLocal
-                K = Sigma(:,:,n)*H'*(H*Sigma(:,:,n)*H'+meaNoise)^-1;
+                vMeaNoise = meaNoise;
             else
-                K = Sigma(:,:,n)*H'*(H*Sigma(:,:,n)*H'+R(:,:,n)'*meaNoise*R(:,:,n))^-1;
+                vMeaNoise = R(:,:,n)'*meaNoise*R(:,:,n);
             end
+            
+            K = Pxv*(vSigma+vMeaNoise)^-1;
             dx = K*logRot(R(:,:,n)'*Mea(:,:,n),'v');
         end
         
         R(:,:,n) = R(:,:,n)*expRot(dx(1:3));
         x(:,n) = x(:,n)+dx(4:6);
-        Sigma(:,:,n) = (eye(6)-K*H)*Sigma(:,:,n);
+        Sigma(:,:,n) = Sigma(:,:,n)-K*(vSigma+vMeaNoise)*K';
     end
     
     stepT(n-1) = toc;

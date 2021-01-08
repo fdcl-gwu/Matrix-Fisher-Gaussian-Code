@@ -1,8 +1,8 @@
-function [ gyroMea, Mea, RTrue, biasTrue ] = genTrig( t, sf, parameters )
+function [ gyroMea, Mea, RTrue, biasTrue ] = genRotAxis( t, sf, parameters )
 % generate a reference rotational motion with noisy angular velocity and
-% attitude/vector measurements. The rotational motion is that the three
-% body-fixed 3-2-1 Euler angles follow sinusoid functions with frequency at
-% 0.35Hz and amplitude at pi, pi/2 and pi.
+% attitude/vector measurements. The rotational motion is that the rigid
+% body rotates about the body-fixed z-axis at 6 rad/s, and at the same time
+% rotates about the inertial y-axis at 1 rad/s.
 % The angular velocity has two noises, a white noise and a bias modeled as
 % a Brownian motion. The attitude measurement noise is modeled as either a
 % matrix Fisher distribution or a Gaussian distribution in the tangent
@@ -16,13 +16,15 @@ function [ gyroMea, Mea, RTrue, biasTrue ] = genTrig( t, sf, parameters )
 %         RTrue - true attitude
 %         biasTrue - true bias
 
-time = (0:1/sf:t);
+time = (0:1/sf:t)';
 N = length(time);
 
 %% parameters
 % motion parameters
-E.fr = 0.35; E.fp = 0.35; E.fh = 0.35;
-E.magr = pi; E.magp = pi/2; E.magh = pi;
+E.initRA = [0;0;1];      % fixed
+E.av = 6;
+E.RARA = [0;1;0];        % fixed
+E.avRA = 1;
 
 % angular velocity noise parameters
 if exist('parameters','var') && isfield(parameters,'omegaNoise')
@@ -76,34 +78,38 @@ else
 end
 
 %% true attitude
-roll = @(t)E.magr*sin(E.fr*2*pi*t);
-pitch = @(t)E.magp*sin(E.fp*2*pi*t);
-yaw = @(t)E.magh*sin(E.fh*2*pi*t);
+R1 = @(t)[cos(t*E.avRA), 0, sin(t*E.avRA);
+          0, 1, 0;
+          -sin(t*E.avRA), 0, cos(t*E.avRA)];
+R2 = @(t)[cos(t*E.av), -sin(t*E.av), 0;
+          sin(t*E.av), cos(t*E.av), 0;
+          0, 0, 1];
+R = @(t)R1(t)*R2(t);
 
-sr2 = @(t)sin(roll(t)/2); sp2 = @(t)sin(pitch(t)/2); sy2 = @(t)sin(yaw(t)/2);
-cr2 = @(t)cos(roll(t)/2); cp2 = @(t)cos(pitch(t)/2); cy2 = @(t)cos(yaw(t)/2);
-q1 = @(t)cr2(t).*cp2(t).*cy2(t)+sr2(t).*sp2(t).*sy2(t);
-q2 = @(t)sr2(t).*cp2(t).*cy2(t)-cr2(t).*sp2(t).*sy2(t);
-q3 = @(t)cr2(t).*sp2(t).*cy2(t)+sr2(t).*cp2(t).*sy2(t);
-q4 = @(t)cr2(t).*cp2(t).*sy2(t)-sr2(t).*sp2(t).*cy2(t);
-qTrue = [q1(time);q2(time);q3(time);q4(time)];
-RTrue = qua2rot(qTrue);
-
+RTrue = zeros(3,3,N);
+for n = 1:N
+    RTrue(:,:,n) = R(time(n));
+end
+    
 %% true angular velocity
-dr = @(t)E.magr*E.fr*2*pi*cos(E.fr*2*pi*t);
-dp = @(t)E.magp*E.fp*2*pi*cos(E.fp*2*pi*t);
-dy = @(t)E.magh*E.fh*2*pi*cos(E.fh*2*pi*t);
+dR11 = @(t)-E.avRA*sin(t*E.avRA)*cos(t*E.av)-E.av*cos(t*E.avRA)*sin(t*E.av);
+dR12 = @(t)E.avRA*sin(t*E.avRA)*sin(t*E.av)-E.av*cos(t*E.avRA)*cos(t*E.av);
+dR13 = @(t)E.avRA*cos(t*E.avRA);
+dR21 = @(t)E.av*cos(t*E.av);
+dR22 = @(t)-E.av*sin(t*E.av);
+dR23 = @(t)0;
+dR31 = @(t)-E.avRA*cos(t*E.avRA)*cos(t*E.av)+E.av*sin(t*E.avRA)*sin(t*E.av);
+dR32 = @(t)E.avRA*cos(t*E.avRA)*sin(t*E.av)+E.av*sin(t*E.avRA)*cos(t*E.av);
+dR33 = @(t)-E.avRA*sin(t*E.avRA);
+dR = @(t)[dR11(t),dR12(t),dR13(t);dR21(t),dR22(t),dR23(t);dR31(t),dR32(t),dR33(t)];
 
-if omegaLocal
-    omega = @(t) [dr(t)-sin(pitch(t)).*dy(t);
-        cos(roll(t)).*dp(t)+sin(roll(t)).*cos(pitch(t)).*dy(t);
-        -sin(roll(t)).*dp(t)+cos(roll(t)).*cos(pitch(t)).*dy(t)];
-    gyro = omega(time);
-else
-    omega = @(t) [cos(yaw(t)).*cos(pitch(t)).*dr(t) - sin(yaw(t)).*dp(t);
-        sin(yaw(t)).*cos(pitch(t)).*dr(t) + cos(yaw(t)).*dp(t);
-        -sin(pitch(t)).*dr(t) + dy(t)];
-    gyro = omega(time);
+gyro = zeros(3,N);
+for n = 1:N
+    if omegaLocal
+        gyro(:,n) = vee(R(time(n))'*dR(time(n)));
+    else
+        gyro(:,n) = vee(dR(time(n))*R(time(n))');
+    end
 end
 
 %% add noise
@@ -111,7 +117,7 @@ biasNoise = randn(3,N)*biasInstability*sqrt(sf);
 biasTrue = cumsum(biasNoise/sf,2);
 
 gyroNoise = randn(3,N)*randomWalk*sqrt(sf);
-gyroMea = gyro+gyroNoise+biasTrue;
+gyroMea = gyro+gyroNoise;
 
 %% gyroscope failure
 if gyroFail
@@ -136,7 +142,7 @@ if meaIsVec
                     Mea(3*(nv-1)+1:3*nv,n) = RTrue(:,:,n)*vRef(3*(nv-1)+1:3*nv)...
                         + vecNoise(3*(nv-1)+1:3*nv,n);
                 end
-                % Mea(3*(nv-1)+1:3*nv,n) = Mea(3*(nv-1)+1:3*nv,n)./sqrt(sum(Mea(3*(nv-1)+1:3*nv,n).^2));
+                Mea(3*(nv-1)+1:3*nv,n) = Mea(3*(nv-1)+1:3*nv,n)./sqrt(sum(Mea(3*(nv-1)+1:3*nv,n).^2));
             end
         end
     else

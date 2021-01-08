@@ -12,7 +12,7 @@ if ~exist('w0','var') || isempty(w0)
 end
 
 wG = 1-w0;
-x = zeros(3,2*n+1);
+x = zeros(n,2*n+1);
 w = zeros(1,2*n+1);
 for i = 1:n
     e = zeros(n,1);
