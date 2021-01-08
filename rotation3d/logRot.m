@@ -43,36 +43,30 @@ u = u./sqrt(sum(u.^2));
 theta = atan2(st,ct);
 
 % special cases
-ind0 = find(st==0 & ct==1);
+ind0 = find(st==0 & abs(ct-1)<1e-12);
 if ~isempty(ind0)
     theta(ind0) = 0;
     u(:,ind0) = [1;0;0];
 end
 
-indpi = find(st==0 & ct==-1);
+indpi = find(st==0 & abs(ct+1)<1e-12);
 theta(indpi) = pi;
 
 for i = 1:length(indpi)
-    if R(1,1,indpi(i))==1
-        u(:,indpi(i)) = [1;0;0];
-    elseif R(2,2,indpi(i))==1
-        u(:,indpi(i)) = [0;1;0];
-    elseif R(3,3,indpi(i))==1
-        u(:,indpi(i)) = [0;0;1];
-    else
-        error('something is wrong, check this fucntion');
-    end
+    IR = eye(3)+R(:,:,indpi(i));
+    u(:,indpi(i)) = IR(:,find(sum(IR.^2),1));
+    u(:,indpi(i)) = u(:,indpi(i))/sqrt(sum(u(:,indpi(i)).^2));
 end
 
 % format result
 if strcmp(format,'ss')
     V = zeros(3,3,size(R,3));
-    V(1,2,:) = -reshape(u(1,:).*theta,1,1,[]);
-    V(2,1,:) = reshape(u(1,:).*theta,1,1,[]);
+    V(1,2,:) = -reshape(u(3,:).*theta,1,1,[]);
+    V(2,1,:) = reshape(u(3,:).*theta,1,1,[]);
     V(1,3,:) = reshape(u(2,:).*theta,1,1,[]);
     V(3,1,:) = -reshape(u(2,:).*theta,1,1,[]);
-    V(2,3,:) = -reshape(u(3,:).*theta,1,1,[]);
-    V(3,2,:) = reshape(u(3,:).*theta,1,1,[]);
+    V(2,3,:) = -reshape(u(1,:).*theta,1,1,[]);
+    V(3,2,:) = reshape(u(1,:).*theta,1,1,[]);
 elseif strcmp(format,'v')
     V = u.*theta;
 else

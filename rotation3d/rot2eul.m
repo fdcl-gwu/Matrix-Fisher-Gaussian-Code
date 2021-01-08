@@ -31,8 +31,8 @@ if checko
 end
 
 % calculate
-q = rot2qua(R);
-e = qua2eul(q);
+q = rot2qua(R,checko);
+e = qua2eul(q,checko);
 
 % format result
 if tran
